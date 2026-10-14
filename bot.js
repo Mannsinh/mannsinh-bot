@@ -9,12 +9,11 @@ const BOT_TOKEN = '8885385318:AAF1PqJygt9mC5ZA6imjl0Q-6jvkcjAvfw0';
 const ADMIN_CHAT_ID = '6271974217';
 const SECRET_SALT = 'Mannsinh_CAD_Suite_2026_SecureKey_#9982!';
 
-// In-memory sessions
-const userSessions = {};
-const pendingApprovals = {};
+const TELEGRAM_HOST = 'api.telegram.org';
+const TELEGRAM_BASE_PATH = `/bot${BOT_TOKEN}`;
 
 // ==========================================
-// 2. HEALTH CHECK WEB SERVER (FOR RENDER 24/7)
+// 2. HEALTH CHECK WEB SERVER (FOR 24/7 CLOUD HOSTING)
 // ==========================================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -25,7 +24,7 @@ http.createServer((req, res) => {
 });
 
 // ==========================================
-// 3. TELEGRAM API HELPER
+// 3. HELPER FUNCTIONS (STABLE HTTPS)
 // ==========================================
 const agent = new https.Agent({ keepAlive: true, timeout: 60000 });
 
@@ -33,9 +32,9 @@ function callApi(method, payload = {}) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify(payload);
     const options = {
-      hostname: 'api.telegram.org',
+      hostname: TELEGRAM_HOST,
       port: 443,
-      path: `/bot${BOT_TOKEN}/${method}`,
+      path: `${TELEGRAM_BASE_PATH}/${method}`,
       method: 'POST',
       agent: agent,
       headers: {
@@ -52,11 +51,11 @@ function callApi(method, payload = {}) {
         try {
           const json = JSON.parse(data);
           if (!json.ok) {
-            console.error(`Telegram API Error (${method}):`, json.description);
+            console.error(`Telegram API Error on [${method}]:`, json.description);
           }
           resolve(json);
         } catch (e) {
-          reject(new Error(`Invalid JSON response: ${data}`));
+          reject(new Error(`Invalid JSON: ${data}`));
         }
       });
     });
@@ -75,12 +74,10 @@ function callApi(method, payload = {}) {
   });
 }
 
-// ==========================================
-// 4. KEY GENERATION ALGORITHM
-// ==========================================
-function generateActivationKey(machineId) {
+function generateLifetimeKey(machineId) {
+  const cleanMid = machineId.trim().toUpperCase();
   const hash = crypto.createHash('sha256')
-    .update(machineId.trim().toUpperCase() + SECRET_SALT)
+    .update(cleanMid + SECRET_SALT)
     .digest('hex')
     .toUpperCase();
 
@@ -92,206 +89,199 @@ function generateActivationKey(machineId) {
   return `LF-${p1}-${p2}-${p3}-${p4}`;
 }
 
-// ==========================================
-// 5. UPDATE HANDLER
-// ==========================================
-async function handleUpdate(update) {
-  // Handle Button Clicks (Approve / Reject)
-  if (update.callback_query) {
-    const query = update.callback_query;
-    const adminId = String(query.from.id);
-    const data = query.data;
-
-    if (adminId !== String(ADMIN_CHAT_ID)) {
-      await callApi('answerCallbackQuery', {
-        callback_query_id: query.id,
-        text: 'Unauthorized action.',
-        show_alert: true
-      });
-      return;
-    }
-
-    if (data.startsWith('approve_')) {
-      const approvalId = data.replace('approve_', '');
-      const reqData = pendingApprovals[approvalId];
-
-      if (!reqData) {
-        await callApi('answerCallbackQuery', {
-          callback_query_id: query.id,
-          text: 'Request expired or already handled.',
-          show_alert: true
-        });
-        return;
-      }
-
-      const key = generateActivationKey(reqData.machineId);
-
-      // Send key to client
-      await callApi('sendMessage', {
-        chat_id: reqData.userId,
-        text: `🎉 *Payment Approved!*\n\nHere is your lifetime activation key for *Mannsinh CAD Suite*:\n\n\`${key}\`\n\n👉 *To Activate:*\n1. Open AutoCAD.\n2. Paste this key into the activation prompt.\n3. Enjoy full lifetime access!`,
-        parse_mode: 'Markdown'
-      });
-
-      // Update Admin message
-      await callApi('editMessageCaption', {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id,
-        caption: `${query.message.caption || ''}\n\n✅ *APPROVED* by Admin.\n🔑 Key: \`${key}\``,
-        parse_mode: 'Markdown'
-      });
-
-      delete pendingApprovals[approvalId];
-      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'License approved & key sent!' });
-
-    } else if (data.startsWith('reject_')) {
-      const approvalId = data.replace('reject_', '');
-      const reqData = pendingApprovals[approvalId];
-
-      if (reqData) {
-        await callApi('sendMessage', {
-          chat_id: reqData.userId,
-          text: `❌ *Payment Verification Failed.*\n\nWe could not verify your receipt. Please ensure you sent the correct payment slip or contact support.`,
-          parse_mode: 'Markdown'
-        });
-        delete pendingApprovals[approvalId];
-      }
-
-      await callApi('editMessageCaption', {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id,
-        caption: `${query.message.caption || ''}\n\n❌ *REJECTED* by Admin.`,
-        parse_mode: 'Markdown'
-      });
-
-      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Request rejected.' });
-    }
-    return;
-  }
-
-  // Handle Standard Messages
-  if (!update.message) return;
-  const msg = update.message;
-  const chatId = msg.chat.id;
-  const text = msg.text ? msg.text.trim() : '';
-
-  console.log(`[MSG from ${chatId}]:`, text || (msg.photo ? '[Photo]' : '[Other]'));
-
-  if (!userSessions[chatId]) {
-    userSessions[chatId] = {};
-  }
-
-  // Command: /start or /start <MACHINE_ID>
-  if (text.startsWith('/start')) {
-    const parts = text.split(' ');
-    if (parts.length > 1 && parts[1].length >= 8) {
-      const mid = parts[1].trim().toUpperCase();
-      userSessions[chatId].machineId = mid;
-      await callApi('sendMessage', {
-        chat_id: chatId,
-        text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n💻 *Detected Machine ID:* \`${mid}\`\n\nPlease send a photo or screenshot of your *$3 ABA / Bakong* payment slip below.`,
-        parse_mode: 'Markdown'
-      });
-      return;
-    }
-
-    await callApi('sendMessage', {
-      chat_id: chatId,
-      text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\nTo receive your lifetime activation key:\n1️⃣ Send your *Machine Hardware ID* (from AutoCAD dialog).\n2️⃣ Send your *$3 ABA / Bakong* payment slip screenshot.`,
-      parse_mode: 'Markdown'
-    });
-    return;
-  }
-
-  // Check if user manually typed a Machine ID (8 to 32 hex chars)
-  const hexPattern = /^[A-Fa-f0-9]{8,32}$/;
-  if (text && hexPattern.test(text)) {
-    const cleanId = text.toUpperCase();
-    userSessions[chatId].machineId = cleanId;
-    await callApi('sendMessage', {
-      chat_id: chatId,
-      text: `✅ *Machine ID Saved:* \`${cleanId}\`\n\nNow, please send your *$3 payment slip photo* below to complete activation.`,
-      parse_mode: 'Markdown'
-    });
-    return;
-  }
-
-  // User sends Payment Slip Photo
-  if (msg.photo && msg.photo.length > 0) {
-    const mid = userSessions[chatId].machineId;
-
-    if (!mid) {
-      await callApi('sendMessage', {
-        chat_id: chatId,
-        text: `⚠️ *Machine ID Missing!*\n\nPlease send your Machine Hardware ID before submitting the receipt, or launch the bot via your checkout page link.`
-      });
-      return;
-    }
-
-    const largestPhoto = msg.photo[msg.photo.length - 1];
-    const approvalId = `${chatId}_${Date.now()}`;
-
-    pendingApprovals[approvalId] = {
-      userId: chatId,
-      machineId: mid,
-      photoId: largestPhoto.file_id
-    };
-
-    // Forward receipt to Admin with Inline Buttons
-    await callApi('sendPhoto', {
-      chat_id: ADMIN_CHAT_ID,
-      photo: largestPhoto.file_id,
-      caption: `🔔 *New License Order ($3)*\n\n👤 *User ID:* \`${chatId}\`\n💻 *Machine ID:* \`${mid}\`\n\nPlease verify payment receipt and approve below:`,
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '✅ Approve & Send Key', callback_data: `approve_${approvalId}` },
-            { text: '❌ Reject', callback_data: `reject_${approvalId}` }
-          ]
-        ]
-      }
-    });
-
-    // Notify Customer
-    await callApi('sendMessage', {
-      chat_id: chatId,
-      text: `📥 *Receipt received!*\n\nOur admin has received your slip. Your lifetime key will be sent here automatically upon confirmation (usually within 1–5 minutes).`,
-      parse_mode: 'Markdown'
-    });
-    return;
-  }
-}
+const userSessions = new Map();
+const pendingRequests = new Map();
+let lastUpdateId = 0;
 
 // ==========================================
-// 6. STABLE LONG-POLLING LOOP
+// 4. TELEGRAM POLLING LOOP
 // ==========================================
-let offset = 0;
-let isPolling = false;
-
 async function pollUpdates() {
-  if (isPolling) return;
-  isPolling = true;
+  await callApi('deleteWebhook', { drop_pending_updates: true });
   console.log('>>> Mannsinh License Bot is polling for Telegram updates... <<<');
 
   while (true) {
     try {
       const res = await callApi('getUpdates', {
-        offset: offset,
-        timeout: 25,
+        offset: lastUpdateId + 1,
+        timeout: 20,
         allowed_updates: ['message', 'callback_query']
       });
 
-      if (res && res.ok && Array.isArray(res.result)) {
+      if (res && res.ok && Array.isArray(res.result) && res.result.length > 0) {
         for (const update of res.result) {
-          offset = update.update_id + 1;
+          lastUpdateId = update.update_id;
+          console.log('\n--- Incoming Update Processed ---');
           await handleUpdate(update).catch(err => console.error('Handler error:', err));
         }
       }
-    } catch (err) {
+    } catch (e) {
+      console.error('Polling error:', e.message);
       await new Promise(r => setTimeout(r, 2000));
     }
   }
 }
 
+// ==========================================
+// 5. UPDATE HANDLER (MESSAGES & BUTTONS)
+// ==========================================
+async function handleUpdate(update) {
+  // A. Admin Button Actions (Approve / Reject)
+  if (update.callback_query) {
+    const query = update.callback_query;
+    if (String(query.from.id) !== String(ADMIN_CHAT_ID)) {
+      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Unauthorized!' });
+      return;
+    }
+
+    const data = query.data;
+
+    if (data.startsWith('approve_')) {
+      const reqId = data.replace('approve_', '');
+      const req = pendingRequests.get(reqId);
+
+      if (!req || !req.mid) {
+        await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Machine ID missing!' });
+        return;
+      }
+
+      const key = generateLifetimeKey(req.mid);
+
+      // Send the activation key to the client
+      await callApi('sendMessage', {
+        chat_id: req.clientChatId,
+        text: `🎉 *Payment Confirmed!*\n\n` +
+              `Here is your **Lifetime Activation Key**:\n\n` +
+              `\`${key}\`\n\n` +
+              `👉 Copy this key, paste it into your AutoCAD dialog, and click **Activate License**.`,
+        parse_mode: 'Markdown'
+      });
+
+      // Update admin message caption
+      await callApi('editMessageCaption', {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id,
+        caption: `✅ *Approved & Key Delivered*\n\n` +
+                 `💻 Machine ID: \`${req.mid}\`\n` +
+                 `🔑 Generated Key: \`${key}\``,
+        parse_mode: 'Markdown'
+      });
+
+      pendingRequests.delete(reqId);
+      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Key sent!' });
+    } else if (data.startsWith('reject_')) {
+      const reqId = data.replace('reject_', '');
+      const req = pendingRequests.get(reqId);
+
+      if (req) {
+        await callApi('sendMessage', {
+          chat_id: req.clientChatId,
+          text: `❌ Your payment receipt could not be verified. Please check the amount or contact support.`
+        });
+        pendingRequests.delete(reqId);
+      }
+
+      await callApi('editMessageCaption', {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id,
+        caption: `❌ *Rejected*`
+      });
+
+      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Rejected' });
+    }
+    return;
+  }
+
+  // B. Customer Messages
+  if (update.message) {
+    const msg = update.message;
+    const chatId = msg.chat.id;
+    const text = msg.text ? msg.text.trim() : '';
+
+    console.log(`[Message from Chat ID ${chatId}]:`, text || (msg.photo ? '[Photo Attachment]' : '[Other]'));
+
+    // 1. /start command
+    if (text.startsWith('/start')) {
+      const parts = text.split(' ');
+      const passedMid = parts.length > 1 ? parts[1].trim().toUpperCase() : null;
+
+      if (passedMid && passedMid.length >= 8) {
+        userSessions.set(chatId, passedMid);
+        await callApi('sendMessage', {
+          chat_id: chatId,
+          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+                `💻 *Detected Machine ID:* \`${passedMid}\`\n\n` +
+                `Please send a photo or screenshot of your **$3 ABA / Bakong payment slip** below.`,
+          parse_mode: 'Markdown'
+        });
+      } else {
+        await callApi('sendMessage', {
+          chat_id: chatId,
+          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+                `To receive your lifetime activation key:\n` +
+                `1️⃣ Send your **Machine Hardware ID** (from AutoCAD dialog).\n` +
+                `2️⃣ Send your **$3 ABA / Bakong payment slip** screenshot.`,
+          parse_mode: 'Markdown'
+        });
+      }
+      return;
+    }
+
+    // 2. Payment receipt image
+    if (msg.photo && msg.photo.length > 0) {
+      const fileId = msg.photo[msg.photo.length - 1].file_id;
+      const caption = msg.caption ? msg.caption.trim().toUpperCase() : '';
+      const mid = caption.match(/[A-F0-9]{8,32}/)?.[0] || userSessions.get(chatId) || '';
+
+      const reqId = `REQ_${Date.now()}`;
+      pendingRequests.set(reqId, { clientChatId: chatId, mid: mid });
+
+      await callApi('sendPhoto', {
+        chat_id: ADMIN_CHAT_ID,
+        photo: fileId,
+        caption: `📩 *New Payment Slip Received*\n\n` +
+                 `👤 Client: @${msg.from.username || msg.from.first_name || 'Customer'}\n` +
+                 `💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\``,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Approve & Issue Key', callback_data: `approve_${reqId}` },
+              { text: '❌ Reject', callback_data: `reject_${reqId}` }
+            ]
+          ]
+        }
+      });
+
+      await callApi('sendMessage', {
+        chat_id: chatId,
+        text: `✅ *Receipt received!* Your slip is under review. Your activation key will be delivered right here once verified.`,
+        parse_mode: 'Markdown'
+      });
+      return;
+    }
+
+    // 3. Text inputs (Manual Machine ID)
+    if (text && !text.startsWith('/')) {
+      const cleanText = text.toUpperCase();
+      if (cleanText.length >= 8) {
+        userSessions.set(chatId, cleanText);
+        await callApi('sendMessage', {
+          chat_id: chatId,
+          text: `💻 Machine ID saved: \`${cleanText}\`\n\nNow please send the photo of your **$3 payment receipt**.`,
+          parse_mode: 'Markdown'
+        });
+      } else {
+        await callApi('sendMessage', {
+          chat_id: chatId,
+          text: `Please send a valid Machine ID from your AutoCAD activation dialog.`
+        });
+      }
+    }
+  }
+}
+
+// ==========================================
+// 6. START BOT
+// ==========================================
 pollUpdates();
