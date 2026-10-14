@@ -115,10 +115,11 @@ async function pollUpdates() {
           await handleUpdate(update).catch(err => console.error('Handler error:', err));
         }
       }
-    } catch (e) {
-      console.error('Polling error:', e.message);
-      await new Promise(r => setTimeout(r, 2000));
-    }
+   } catch (e) {
+  console.error('Polling error:', e.message);
+  // Wait 5s to allow duplicate instances to disconnect cleanly
+  await new Promise(r => setTimeout(r, 5000));
+}
   }
 }
 
