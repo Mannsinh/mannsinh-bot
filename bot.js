@@ -13,7 +13,7 @@ const TELEGRAM_HOST = 'api.telegram.org';
 const TELEGRAM_BASE_PATH = `/bot${BOT_TOKEN}`;
 
 // ==========================================
-// 2. HEALTH CHECK WEB SERVER (FOR 24/7 CLOUD HOSTING)
+// 2. HEALTH CHECK WEB SERVER (FOR RENDER 24/7)
 // ==========================================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -115,11 +115,10 @@ async function pollUpdates() {
           await handleUpdate(update).catch(err => console.error('Handler error:', err));
         }
       }
-   } catch (e) {
-  console.error('Polling error:', e.message);
-  // Wait 5s to allow duplicate instances to disconnect cleanly
-  await new Promise(r => setTimeout(r, 5000));
-}
+    } catch (e) {
+      console.error('Polling error:', e.message);
+      await new Promise(r => setTimeout(r, 4000));
+    }
   }
 }
 
@@ -148,7 +147,7 @@ async function handleUpdate(update) {
 
       const key = generateLifetimeKey(req.mid);
 
-      // Send the activation key to the client
+      // Send the activation key to the customer
       await callApi('sendMessage', {
         chat_id: req.clientChatId,
         text: `🎉 *Payment Confirmed!*\n\n` +
@@ -231,11 +230,14 @@ async function handleUpdate(update) {
     // 2. Payment receipt image
     if (msg.photo && msg.photo.length > 0) {
       const fileId = msg.photo[msg.photo.length - 1].file_id;
-      const caption = msg.caption ? msg.caption.trim().toUpperCase() : '';
-      const mid = caption.match(/[A-F0-9]{8,32}/)?.[0] || userSessions.get(chatId) || '';
+      const captionText = msg.caption ? msg.caption.trim().toUpperCase() : '';
+      const match = captionText ? captionText.match(/[A-F0-9]{8,32}/) : null;
+      const mid = (match ? match[0] : null) || userSessions.get(chatId) || '';
 
       const reqId = `REQ_${Date.now()}`;
       pendingRequests.set(reqId, { clientChatId: chatId, mid: mid });
+
+      console.log(`Forwarding slip from user ${chatId} (MID: ${mid}) to Admin${ADMIN_CHAT_ID}...`);
 
       await callApi('sendPhoto', {
         chat_id: ADMIN_CHAT_ID,
