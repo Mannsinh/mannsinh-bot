@@ -5,7 +5,7 @@ const https = require('https');
 // ==========================================
 // 1. CONFIGURATION
 // ==========================================
-const BOT_TOKEN = '8885385318:AAF1PqJygt9mC5ZA6imjl0Q-6jvkcjAvfw0';
+const BOT_TOKEN = '8885385318:AAF1PqJygt9mC5ZA6imJl0Q-6jvkCjAvfw0';
 const ADMIN_CHAT_ID = '6271974217';
 const SECRET_SALT = 'Mannsinh_CAD_Suite_2026_SecureKey_#9982!';
 
