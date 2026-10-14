@@ -74,19 +74,17 @@ function callApi(method, payload = {}) {
   });
 }
 
+// ==========================================
+// 4. EXACT C# MATCHING KEY GENERATOR
+// Payload: $"{machineId}_{prefix}_{SecretSalt}"
+// Hash: First 8 bytes (16 hex chars)
+// ==========================================
 function generateLifetimeKey(machineId) {
   const cleanMid = machineId.trim().toUpperCase();
-  const hash = crypto.createHash('sha256')
-    .update(cleanMid + SECRET_SALT)
-    .digest('hex')
-    .toUpperCase();
-
-  const p1 = hash.substring(0, 4);
-  const p2 = hash.substring(4, 8);
-  const p3 = hash.substring(8, 12);
-  const p4 = hash.substring(12, 16);
-
-  return `LF-${p1}-${p2}-${p3}-${p4}`;
+  const payload = `${cleanMid}_LF_${SECRET_SALT}`;
+  const hashBuffer = crypto.createHash('sha256').update(payload, 'utf8').digest();
+  const hashHex = hashBuffer.subarray(0, 8).toString('hex').toUpperCase();
+  return `LF-${hashHex}`;
 }
 
 const userSessions = new Map();
@@ -94,7 +92,7 @@ const pendingRequests = new Map();
 let lastUpdateId = 0;
 
 // ==========================================
-// 4. TELEGRAM POLLING LOOP
+// 5. TELEGRAM POLLING LOOP
 // ==========================================
 async function pollUpdates() {
   await callApi('deleteWebhook', { drop_pending_updates: true });
@@ -123,10 +121,10 @@ async function pollUpdates() {
 }
 
 // ==========================================
-// 5. UPDATE HANDLER
+// 6. UPDATE HANDLER
 // ==========================================
 async function handleUpdate(update) {
-  // A. Admin Button Clicks
+  // A. Admin Button Actions (Approve / Reject)
   if (update.callback_query) {
     const query = update.callback_query;
     if (String(query.from.id) !== String(ADMIN_CHAT_ID)) {
@@ -147,16 +145,23 @@ async function handleUpdate(update) {
 
       const key = generateLifetimeKey(req.mid);
 
+      // Send the activation key to the customer
       await callApi('sendMessage', {
         chat_id: req.clientChatId,
-        text: `🎉 *Payment Confirmed!*\n\nHere is your **Lifetime Activation Key**:\n\n\`${key}\`\n\n👉 Copy this key, paste it into your AutoCAD dialog, and click **Activate License**.`,
+        text: `🎉 *Payment Confirmed!*\n\n` +
+              `Here is your **Lifetime Activation Key**:\n\n` +
+              `\`${key}\`\n\n` +
+              `👉 Copy this key, paste it into your AutoCAD dialog, and click **Activate License**.`,
         parse_mode: 'Markdown'
       });
 
+      // Update admin message caption
       await callApi('editMessageCaption', {
         chat_id: query.message.chat.id,
         message_id: query.message.message_id,
-        caption: `✅ *Approved & Key Delivered*\n\n💻 Machine ID: \`${req.mid}\`\n🔑 Generated Key: \`${key}\``,
+        caption: `✅ *Approved & Key Delivered*\n\n` +
+                 `💻 Machine ID: \`${req.mid}\`\n` +
+                 `🔑 Generated Key: \`${key}\``,
         parse_mode: 'Markdown'
       });
 
@@ -185,7 +190,7 @@ async function handleUpdate(update) {
     return;
   }
 
-  // B. Messages
+  // B. Customer Messages
   if (update.message) {
     const msg = update.message;
     const chatId = msg.chat.id;
@@ -193,7 +198,7 @@ async function handleUpdate(update) {
 
     console.log(`[Message from Chat ID ${chatId}]:`, text || (msg.photo ? '[Photo Attachment]' : '[Other]'));
 
-    // /start command
+    // 1. /start command
     if (text.startsWith('/start')) {
       const parts = text.split(' ');
       const passedMid = parts.length > 1 ? parts[1].trim().toUpperCase() : null;
@@ -202,20 +207,25 @@ async function handleUpdate(update) {
         userSessions.set(chatId, passedMid);
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n💻 *Detected Machine ID:* \`${passedMid}\`\n\nPlease send a photo or screenshot of your **$3 ABA / Bakong payment slip** below.`,
+          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+                `💻 *Detected Machine ID:* \`${passedMid}\`\n\n` +
+                `Please send a photo or screenshot of your **$3 ABA / Bakong payment slip** below.`,
           parse_mode: 'Markdown'
         });
       } else {
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\nTo receive your lifetime activation key:\n1️⃣ Send your **Machine Hardware ID** (from AutoCAD dialog).\n2️⃣ Send your **$3 ABA / Bakong payment slip** screenshot.`,
+          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+                `To receive your lifetime activation key:\n` +
+                `1️⃣ Send your **Machine Hardware ID** (from AutoCAD dialog).\n` +
+                `2️⃣ Send your **$3 ABA / Bakong payment slip** screenshot.`,
           parse_mode: 'Markdown'
         });
       }
       return;
     }
 
-    // Photo receipt
+    // 2. Payment receipt image
     if (msg.photo && msg.photo.length > 0) {
       const fileId = msg.photo[msg.photo.length - 1].file_id;
       const captionText = msg.caption ? msg.caption.trim().toUpperCase() : '';
@@ -230,7 +240,9 @@ async function handleUpdate(update) {
       await callApi('sendPhoto', {
         chat_id: ADMIN_CHAT_ID,
         photo: fileId,
-        caption: `📩 *New Payment Slip Received*\n\n👤 Client: @${msg.from.username || msg.from.first_name || 'Customer'}\n💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\``,
+        caption: `📩 *New Payment Slip Received*\n\n` +
+                 `👤 Client: @${msg.from.username || msg.from.first_name || 'Customer'}\n` +
+                 `💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\``,
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
@@ -250,7 +262,7 @@ async function handleUpdate(update) {
       return;
     }
 
-    // Machine ID manual input
+    // 3. Text inputs (Manual Machine ID)
     if (text && !text.startsWith('/')) {
       const cleanText = text.toUpperCase();
       if (cleanText.length >= 8) {
@@ -271,6 +283,6 @@ async function handleUpdate(update) {
 }
 
 // ==========================================
-// 6. START BOT
+// 7. START BOT
 // ==========================================
 pollUpdates();
