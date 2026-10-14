@@ -25,7 +25,7 @@ http.createServer((req, res) => {
 });
 
 // ==========================================
-// 3. TELEGRAM API HELPER (STABLE HTTPS)
+// 3. TELEGRAM API HELPER
 // ==========================================
 const agent = new https.Agent({ keepAlive: true, timeout: 60000 });
 
@@ -50,9 +50,13 @@ function callApi(method, payload = {}) {
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
         try {
-          resolve(JSON.parse(data));
+          const json = JSON.parse(data);
+          if (!json.ok) {
+            console.error(`Telegram API Error (${method}):`, json.description);
+          }
+          resolve(json);
         } catch (e) {
-          reject(new Error(`Invalid JSON: ${data}`));
+          reject(new Error(`Invalid JSON response: ${data}`));
         }
       });
     });
@@ -125,7 +129,7 @@ async function handleUpdate(update) {
       // Send key to client
       await callApi('sendMessage', {
         chat_id: reqData.userId,
-        text: `🎉 *Payment Approved!*\\n\\nHere is your lifetime activation key for *Mannsinh CAD Suite*:\\n\\n\`${key}\`\\n\\n👉 *To Activate:*\\n1. Open AutoCAD.\\n2. Paste this key into the activation prompt.\\n3. Enjoy full lifetime access!`,
+        text: `🎉 *Payment Approved!*\n\nHere is your lifetime activation key for *Mannsinh CAD Suite*:\n\n\`${key}\`\n\n👉 *To Activate:*\n1. Open AutoCAD.\n2. Paste this key into the activation prompt.\n3. Enjoy full lifetime access!`,
         parse_mode: 'Markdown'
       });
 
@@ -147,7 +151,7 @@ async function handleUpdate(update) {
       if (reqData) {
         await callApi('sendMessage', {
           chat_id: reqData.userId,
-          text: '❌ *Payment Verification Failed.*\\n\\nWe could not verify your receipt. Please ensure you sent the correct payment slip or contact support.',
+          text: `❌ *Payment Verification Failed.*\n\nWe could not verify your receipt. Please ensure you sent the correct payment slip or contact support.`,
           parse_mode: 'Markdown'
         });
         delete pendingApprovals[approvalId];
@@ -170,6 +174,8 @@ async function handleUpdate(update) {
   const msg = update.message;
   const chatId = msg.chat.id;
   const text = msg.text ? msg.text.trim() : '';
+
+  console.log(`[MSG from ${chatId}]:`, text || (msg.photo ? '[Photo]' : '[Other]'));
 
   if (!userSessions[chatId]) {
     userSessions[chatId] = {};
@@ -197,13 +203,14 @@ async function handleUpdate(update) {
     return;
   }
 
-  // Check if user manually typed a 16-character Machine ID
-  const hexPattern = /^[A-Fa-f0-9]{12,24}$/;
+  // Check if user manually typed a Machine ID (8 to 32 hex chars)
+  const hexPattern = /^[A-Fa-f0-9]{8,32}$/;
   if (text && hexPattern.test(text)) {
-    userSessions[chatId].machineId = text.toUpperCase();
+    const cleanId = text.toUpperCase();
+    userSessions[chatId].machineId = cleanId;
     await callApi('sendMessage', {
       chat_id: chatId,
-      text: `✅ *Machine ID Saved:* \`${text.toUpperCase()}\`\n\nNow, please send your *$3 payment slip photo* to complete activation.`,
+      text: `✅ *Machine ID Saved:* \`${cleanId}\`\n\nNow, please send your *$3 payment slip photo* below to complete activation.`,
       parse_mode: 'Markdown'
     });
     return;
@@ -249,7 +256,7 @@ async function handleUpdate(update) {
     // Notify Customer
     await callApi('sendMessage', {
       chat_id: chatId,
-      text: `📥 *Receipt received!*\\n\\nOur admin has received your slip. Your lifetime key will be sent here automatically upon confirmation (usually within 1–5 minutes).`,
+      text: `📥 *Receipt received!*\n\nOur admin has received your slip. Your lifetime key will be sent here automatically upon confirmation (usually within 1–5 minutes).`,
       parse_mode: 'Markdown'
     });
     return;
@@ -282,7 +289,6 @@ async function pollUpdates() {
         }
       }
     } catch (err) {
-      // Wait 2 seconds before retrying on network drops
       await new Promise(r => setTimeout(r, 2000));
     }
   }
