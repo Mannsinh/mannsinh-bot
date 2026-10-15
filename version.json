@@ -1,5 +1,5 @@
-﻿{
-  "version": "1.0.0",
+{
+  "version": "1.0.1",
   "downloadUrl": "https://raw.githubusercontent.com/Mannsinh/mannsinh-bot/main/updates/Mannsinh.bundle.zip",
-  "changelog": "Initial stable release with automated licensing and batch plotting tools."
+  "changelog": "Test update notification."
 }
