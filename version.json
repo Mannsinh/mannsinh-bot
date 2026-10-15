@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.0",
   "downloadUrl": "https://raw.githubusercontent.com/Mannsinh/mannsinh-bot/main/updates/Mannsinh.bundle.zip",
-  "changelog": "Test update notification."
+  "changelog": "Initial stable release."
 }
