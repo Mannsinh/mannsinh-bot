@@ -11,7 +11,7 @@ const SECRET_SALT = 'Mannsinh_CAD_Suite_2026_SecureKey_#9982!';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // ==========================================
-// 2. HEALTH CHECK WEB SERVER (FOR 24/7 CLOUD HOSTING)
+// 2. HEALTH CHECK WEB SERVER (24/7 CLOUD HOSTING)
 // ==========================================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -22,7 +22,7 @@ http.createServer((req, res) => {
 });
 
 // ==========================================
-// 3. HELPER FUNCTIONS & ORIGINAL 2-PART KEY
+// 3. API CALLER & 3-PART LIFETIME KEY GENERATOR
 // ==========================================
 async function callApi(method, payload) {
   try {
@@ -42,13 +42,15 @@ async function callApi(method, payload) {
   }
 }
 
-// Generates the exact original 2-part key: LF-XXXXXXXXXXXXXXXX (Accepted by your C# plugin)
+// Generates the working LF-PERM-XXXXXXXX key matching your C# plugin
 function generateLifetimeKey(machineId) {
   const cleanMid = machineId.trim().toUpperCase();
-  const payload = `${cleanMid}_LF_${SECRET_SALT}`;
+  const tier = 'LF';
+  const expiryTag = 'PERM';
+  const payload = `${cleanMid}_${tier}_${expiryTag}_${SECRET_SALT}`;
   const hashBuffer = crypto.createHash('sha256').update(payload, 'utf8').digest();
-  const hashHex = hashBuffer.subarray(0, 8).toString('hex').toUpperCase();
-  return `LF-${hashHex}`;
+  const signature = hashBuffer.subarray(0, 8).toString('hex').toUpperCase();
+  return `${tier}-${expiryTag}-${signature}`;
 }
 
 const userSessions = new Map();
@@ -84,7 +86,8 @@ async function handleUpdate(update) {
       await callApi('sendMessage', {
         chat_id: req.clientChatId,
         text: `🎉 *Payment Confirmed!*\n\n` +
-              `Here is your **Lifetime Activation Key**:\n\n` +
+              `📦 **Plan:** Lifetime Access\n` +
+              `🔑 **Activation Key:**\n\n` +
               `\`${key}\`\n\n` +
               `👉 Copy this key, paste it into your AutoCAD dialog, and click **Activate License**.`,
         parse_mode: 'Markdown'
@@ -92,6 +95,7 @@ async function handleUpdate(update) {
 
       // Update admin message caption
       const finalCaption = `✅ *Approved & Key Delivered*\n\n` +
+                           `📦 Plan: Lifetime Access\n` +
                            `💻 Machine ID: \`${req.mid}\`\n` +
                            `🔑 Generated Key: \`${key}\``;
 
@@ -159,7 +163,6 @@ async function handleUpdate(update) {
 
       let passedMid = null;
       if (rawParam) {
-        // Strip any trailing tier flags if passed by accident
         passedMid = rawParam.includes('_') ? rawParam.split('_')[0] : rawParam;
       }
 
