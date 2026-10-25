@@ -119,7 +119,7 @@ async function handleUpdate(update) {
 
     const data = query.data;
 
-    // Handles approve_M3_REQID or approve_LF_REQID
+    // Format: approve_M3_REQID or approve_LF_REQID
     if (data.startsWith('approve_')) {
       const parts = data.split('_');
       const tier = parts[1]; // 'M3' or 'LF'
@@ -147,15 +147,26 @@ async function handleUpdate(update) {
       });
 
       // 2. Update admin message to record issuance
-      await callApi('editMessageCaption', {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id,
-        caption: `✅ *Approved & Key Delivered*\n\n` +
-                 `📦 Plan: *${planName}*\n` +
-                 `💻 Machine ID: \`${req.mid}\`\n` +
-                 `🔑 Generated Key: \`${key}\``,
-        parse_mode: 'Markdown'
-      });
+      const finalCaption = `✅ *Approved & Key Delivered*\n\n` +
+                           `📦 Plan: *${planName}*\n` +
+                           `💻 Machine ID: \`${req.mid}\`\n` +
+                           `🔑 Generated Key: \`${key}\``;
+
+      if (query.message.photo) {
+        await callApi('editMessageCaption', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          caption: finalCaption,
+          parse_mode: 'Markdown'
+        });
+      } else {
+        await callApi('editMessageText', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: finalCaption,
+          parse_mode: 'Markdown'
+        });
+      }
 
       await callApi('answerCallbackQuery', { callback_query_id: query.id, text: `Key issued for ${planName}!` });
       pendingRequests.delete(reqId);
@@ -171,11 +182,20 @@ async function handleUpdate(update) {
         });
       }
 
-      await callApi('editMessageCaption', {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id,
-        caption: `❌ *Slip Rejected*`
-      });
+      const rejectCaption = `❌ *Slip Rejected*`;
+      if (query.message.photo) {
+        await callApi('editMessageCaption', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          caption: rejectCaption
+        });
+      } else {
+        await callApi('editMessageText', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: rejectCaption
+        });
+      }
 
       await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Rejected' });
       pendingRequests.delete(reqId);
@@ -246,33 +266,49 @@ async function handleUpdate(update) {
 
       const clientName = msg.from.username ? `@${msg.from.username}` : (msg.from.first_name || 'Customer');
 
-      await callApi('sendPhoto', {
-        chat_id: ADMIN_CHAT_ID,
-        photo: fileId,
-        caption: `📩 *New Payment Slip Received*\n\n` +
-                 `👤 Client: ${clientName} (\`${chatId}\`)\n` +
-                 `💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\`\n` +
-                 `🏷 Requested: *${chosenTier === 'M3' ? '3 Months ($1.50)' : 'Lifetime ($3.00)'}*\n\n` +
-                 `*Check slip amount and choose action:*`,
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '📅 Approve 3M ($1.50)', callback_data: `approve_M3_${reqId}` },
-              { text: '✨ Approve Lifetime ($3)', callback_data: `approve_LF_${reqId}` }
-            ],
-            [
-              { text: '❌ Reject Slip', callback_data: `reject_${reqId}` }
-            ]
-          ]
-        }
-      });
+      const adminCaption = `📩 *New Payment Slip Received*\n\n` +
+                           `👤 Client: ${clientName} (\`${chatId}\`)\n` +
+                           `💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\`\n` +
+                           `🏷 Requested: *${chosenTier === 'M3' ? '3 Months ($1.50)' : 'Lifetime ($3.00)'}*\n\n` +
+                           `*Choose an action:*`;
 
-      await callApi('sendMessage', {
-        chat_id: chatId,
-        text: `✅ *Receipt received!* Your slip is under review. Your activation key will be delivered right here once verified.`,
-        parse_mode: 'Markdown'
-      });
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '📅 Approve 3M ($1.50)', callback_data: `approve_M3_${reqId}` },
+            { text: '✨ Approve Lifetime ($3)', callback_data: `approve_LF_${reqId}` }
+          ],
+          [
+            { text: '❌ Reject Slip', callback_data: `reject_${reqId}` }
+          ]
+        ]
+      };
+
+      // Guaranteed delivery via direct query string
+      const sendUrl = `${TELEGRAM_API}/sendPhoto?chat_id=${ADMIN_CHAT_ID}&photo=${encodeURIComponent(fileId)}&caption=${encodeURIComponent(adminCaption)}&parse_mode=Markdown&reply_markup=${encodeURIComponent(JSON.stringify(keyboard))}`;
+
+      const adminRes = await fetch(sendUrl);
+      const adminJson = await adminRes.json();
+
+      // Fallback: If Telegram photo rejects, send as markdown text with buttons
+      if (!adminJson.ok) {
+        await callApi('sendMessage', {
+          chat_id: ADMIN_CHAT_ID,
+          text: adminCaption,
+          parse_mode: 'Markdown',
+          reply_markup: keyboard
+        });
+      }
+
+      // Customer confirmation
+      if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
+        await callApi('sendMessage', {
+          chat_id: chatId,
+          text: `✅ *Receipt received!* Your slip is under review. Your activation key will be delivered right here once verified.`,
+          parse_mode: 'Markdown'
+        });
+      }
+
       return;
     }
 
