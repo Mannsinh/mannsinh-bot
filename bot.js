@@ -258,8 +258,8 @@ async function handleUpdate(update) {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '📅 Approve 3M ($1.50)', callback_data: `approve_M3_${reqId}` },
-              { text: '✨ Approve Lifetime ($3)', callback_data: `approve_LF_${reqId}` }
+              { text: '✅ Approve 3M ($1.50)', callback_data: `approve_M3_${reqId}` },
+              { text: '✅ Approve Lifetime ($3)', callback_data: `approve_LF_${reqId}` }
             ],
             [
               { text: '❌ Reject Slip', callback_data: `reject_${reqId}` }
