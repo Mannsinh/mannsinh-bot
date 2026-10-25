@@ -22,7 +22,7 @@ http.createServer((req, res) => {
 });
 
 // ==========================================
-// 3. HELPER FUNCTIONS & KEY GENERATION
+// 3. HELPER FUNCTIONS
 // ==========================================
 async function callApi(method, payload) {
   try {
@@ -38,39 +38,16 @@ async function callApi(method, payload) {
     return json;
   } catch (err) {
     console.error(`Network Error on ${method}:`, err.message);
+    return null;
   }
 }
 
-function formatDate(date) {
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(date.getUTCDate()).padStart(2, '0');
-  return `${y}${m}${d}`;
-}
-
-// Generates 3-part key: PREFIX-EXPIRY-SIGNATURE
-function generatePluginKey(machineId, tier) {
+function generateLifetimeKey(machineId) {
   const cleanMid = machineId.trim().toUpperCase();
-  const now = new Date();
-  let expiryTag = 'PERM';
-
-  if (tier === 'M3') {
-    const exp = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
-    expiryTag = formatDate(exp);
-  } else {
-    tier = 'LF';
-    expiryTag = 'PERM';
-  }
-
-  const payload = `${cleanMid}_${tier}_${expiryTag}_${SECRET_SALT}`;
+  const payload = `${cleanMid}_LF_${SECRET_SALT}`;
   const hashBuffer = crypto.createHash('sha256').update(payload, 'utf8').digest();
-  const signature = hashBuffer.subarray(0, 8).toString('hex').toUpperCase();
-
-  return {
-    key: `${tier}-${expiryTag}-${signature}`,
-    tier: tier,
-    expiryTag: expiryTag
-  };
+  const hashHex = hashBuffer.subarray(0, 8).toString('hex').toUpperCase();
+  return `LF-${hashHex}`;
 }
 
 const userSessions = new Map();
@@ -78,36 +55,10 @@ const pendingRequests = new Map();
 let lastUpdateId = 0;
 
 // ==========================================
-// 4. TELEGRAM POLLING LOOP
-// ==========================================
-async function pollUpdates() {
-  await callApi('deleteWebhook', { drop_pending_updates: false });
-  console.log('>>> Mannsinh License Bot is polling for Telegram updates... <<<');
-
-  while (true) {
-    try {
-      const res = await fetch(`${TELEGRAM_API}/getUpdates?offset=${lastUpdateId + 1}&timeout=10`);
-      const data = await res.json();
-
-      if (data.ok && data.result.length > 0) {
-        for (const update of data.result) {
-          lastUpdateId = update.update_id;
-          console.log('\n--- Incoming Update Processed ---');
-          await handleUpdate(update);
-        }
-      }
-    } catch (e) {
-      console.error('Polling error:', e.message);
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
-}
-
-// ==========================================
-// 5. UPDATE HANDLER (MESSAGES & BUTTONS)
+// 4. UPDATE HANDLER (MESSAGES & BUTTONS)
 // ==========================================
 async function handleUpdate(update) {
-  // A. Admin Button Actions (Approve M3 / Approve LF / Reject)
+  // A. Admin Button Actions (Approve / Reject)
   if (update.callback_query) {
     const query = update.callback_query;
     if (query.from.id.toString() !== ADMIN_CHAT_ID.toString()) {
@@ -118,59 +69,37 @@ async function handleUpdate(update) {
     const data = query.data;
 
     if (data.startsWith('approve_')) {
-      const parts = data.split('_');
-      const tier = parts[1]; // 'M3' or 'LF'
-      const reqId = parts.slice(2).join('_');
+      const reqId = data.replace('approve_', '');
       const req = pendingRequests.get(reqId);
 
-      if (!req) {
-        await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Request expired or not found!' });
+      if (!req || !req.mid) {
+        await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Machine ID missing!' });
         return;
       }
 
-      if (!req.mid || req.mid === 'NOT DETECTED') {
-        await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Machine ID is missing! Cannot issue key.' });
-        return;
-      }
+      const key = generateLifetimeKey(req.mid);
 
-      const { key, expiryTag } = generatePluginKey(req.mid, tier);
-      const planName = tier === 'M3' ? '3 Months Access' : 'Lifetime Access';
-      const expiryText = tier === 'M3' ? `\n⏳ Valid Until: \`${expiryTag}\`` : '';
-
-      // 1. Deliver key to customer
+      // Send the activation key to the client
       await callApi('sendMessage', {
         chat_id: req.clientChatId,
         text: `🎉 *Payment Confirmed!*\n\n` +
-              `📦 **Plan:** ${planName}${expiryText}\n` +
-              `🔑 **Activation Key:**\n\n` +
+              `Here is your **Lifetime Activation Key**:\n\n` +
               `\`${key}\`\n\n` +
               `👉 Copy this key, paste it into your AutoCAD dialog, and click **Activate License**.`,
         parse_mode: 'Markdown'
       });
 
-      // 2. Update Admin message
-      const finalCaption = `✅ *Approved & Key Delivered*\n\n` +
-                           `📦 Plan: *${planName}*\n` +
-                           `💻 Machine ID: \`${req.mid}\`\n` +
-                           `🔑 Generated Key: \`${key}\``;
+      // Update admin message caption
+      await callApi('editMessageCaption', {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id,
+        caption: `✅ *Approved & Key Delivered*\n\n` +
+                 `💻 Machine ID: \`${req.mid}\`\n` +
+                 `🔑 Generated Key: \`${key}\``,
+        parse_mode: 'Markdown'
+      });
 
-      if (query.message.photo || query.message.document) {
-        await callApi('editMessageCaption', {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          caption: finalCaption,
-          parse_mode: 'Markdown'
-        });
-      } else {
-        await callApi('editMessageText', {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          text: finalCaption,
-          parse_mode: 'Markdown'
-        });
-      }
-
-      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: `Key issued for ${planName}!` });
+      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Key sent!' });
       pendingRequests.delete(reqId);
 
     } else if (data.startsWith('reject_')) {
@@ -180,24 +109,15 @@ async function handleUpdate(update) {
       if (req) {
         await callApi('sendMessage', {
           chat_id: req.clientChatId,
-          text: `❌ Your payment receipt could not be verified. Please check the transfer details or contact @MANNSINH for support.`
+          text: `❌ Your payment receipt could not be verified. Please check the amount or contact support.`
         });
       }
 
-      const rejectCaption = `❌ *Slip Rejected*`;
-      if (query.message.photo || query.message.document) {
-        await callApi('editMessageCaption', {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          caption: rejectCaption
-        });
-      } else {
-        await callApi('editMessageText', {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          text: rejectCaption
-        });
-      }
+      await callApi('editMessageCaption', {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id,
+        caption: `❌ *Rejected*`
+      });
 
       await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Rejected' });
       pendingRequests.delete(reqId);
@@ -214,110 +134,56 @@ async function handleUpdate(update) {
     // 1. /start command
     if (text.startsWith('/start')) {
       const parts = text.split(' ');
-      const rawParam = parts.length > 1 ? parts[1].trim().toUpperCase() : null;
-
-      let passedMid = null;
-      let requestedTier = 'LF';
-
-      if (rawParam) {
-        if (rawParam.includes('_')) {
-          const split = rawParam.split('_');
-          passedMid = split[0];
-          requestedTier = split[1] === 'M3' ? 'M3' : 'LF';
-        } else {
-          passedMid = rawParam;
-        }
-      }
+      const passedMid = parts.length > 1 ? parts[1].trim().toUpperCase() : null;
 
       if (passedMid && passedMid.length >= 8) {
-        userSessions.set(chatId, { mid: passedMid, tier: requestedTier });
-        const planPrompt = requestedTier === 'M3' ? '3 Months ($1.50)' : 'Lifetime ($3.00)';
-        
+        userSessions.set(chatId, passedMid);
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `👋 *Welcome to Axon Arch Activation!*\n\n` +
-                `💻 *Detected Machine ID:* \`${passedMid}\`\n` +
-                `📦 *Selected Plan:* ${planPrompt}\n\n` +
-                `Please send a photo or screenshot of your **ABA / Bakong payment slip** below.`,
+          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+                `💻 *Detected Machine ID:* \`${passedMid}\`\n\n` +
+                `Please send a photo or screenshot of your **$3 ABA / Bakong payment slip** below.`,
           parse_mode: 'Markdown'
         });
       } else {
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `👋 *Welcome to Axon Arch Activation!*\n\n` +
-                `To receive your activation key:\n` +
+          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+                `To receive your lifetime activation key:\n` +
                 `1️⃣ Send your **Machine Hardware ID** (from AutoCAD dialog).\n` +
-                `2️⃣ Send your **payment slip screenshot** ($1.50 for 3 Months or $3.00 for Lifetime).`,
+                `2️⃣ Send your **$3 ABA / Bakong payment slip** screenshot.`,
           parse_mode: 'Markdown'
         });
       }
       return;
     }
 
-    // 2. Universal Photo & Slip Handler (Catches compressed images and uncompressed file uploads)
-    const isPhoto = Boolean(msg.photo && msg.photo.length > 0);
-    const isImageDoc = Boolean(msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/'));
-
-    if (isPhoto || isImageDoc) {
-      const fileId = isPhoto ? msg.photo[msg.photo.length - 1].file_id : msg.document.file_id;
-      const caption = (msg.caption || '').trim().toUpperCase();
-
-      const session = userSessions.get(chatId) || {};
-      const mid = caption.match(/[A-F0-9]{8,24}/)?.[0] || session.mid || 'NOT DETECTED';
-      const chosenTier = session.tier || 'LF';
+    // 2. Payment receipt image
+    if (msg.photo) {
+      const fileId = msg.photo[msg.photo.length - 1].file_id;
+      const caption = msg.caption ? msg.caption.trim().toUpperCase() : '';
+      const mid = caption.match(/[A-F0-9]{8,24}/)?.[0] || userSessions.get(chatId) || '';
 
       const reqId = `REQ_${Date.now()}`;
-      pendingRequests.set(reqId, { 
-        clientChatId: chatId, 
-        mid: mid, 
-        requestedTier: chosenTier 
-      });
+      pendingRequests.set(reqId, { clientChatId: chatId, mid: mid });
 
-      const clientName = msg.from.username 
-        ? `@${msg.from.username}` 
-        : [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Customer';
-
-      const adminCaption = `📩 *New Payment Slip Received*\n\n` +
-                           `👤 Client: ${clientName} (\`${chatId}\`)\n` +
-                           `💻 Machine ID: \`${mid}\`\n` +
-                           `🏷 Plan: *${chosenTier === 'M3' ? '3 Months ($1.50)' : 'Lifetime ($3.00)'}*\n\n` +
-                           `*Inspect slip and choose tier to issue:*`;
-
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '📅 Approve 3M ($1.50)', callback_data: `approve_M3_${reqId}` },
-            { text: '✨ Approve Lifetime ($3)', callback_data: `approve_LF_${reqId}` }
-          ],
-          [
-            { text: '❌ Reject Slip', callback_data: `reject_${reqId}` }
-          ]
-        ]
-      };
-
-      // Deliver image directly using JSON payload
-      const sendMethod = isPhoto ? 'sendPhoto' : 'sendDocument';
-      const payloadKey = isPhoto ? 'photo' : 'document';
-
-      const adminSendResult = await callApi(sendMethod, {
+      await callApi('sendPhoto', {
         chat_id: ADMIN_CHAT_ID,
-        [payloadKey]: fileId,
-        caption: adminCaption,
+        photo: fileId,
+        caption: `📩 *New Payment Slip Received*\n\n` +
+                 `👤 Client: @${msg.from.username || msg.from.first_name || 'Customer'}\n` +
+                 `💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\``,
         parse_mode: 'Markdown',
-        reply_markup: keyboard
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Approve & Issue Key', callback_data: `approve_${reqId}` },
+              { text: '❌ Reject', callback_data: `reject_${reqId}` }
+            ]
+          ]
+        }
       });
 
-      // Fallback if media preview encounters an error
-      if (!adminSendResult || !adminSendResult.ok) {
-        await callApi('sendMessage', {
-          chat_id: ADMIN_CHAT_ID,
-          text: adminCaption,
-          parse_mode: 'Markdown',
-          reply_markup: keyboard
-        });
-      }
-
-      // Notify customer if not testing directly from admin account
       if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
         await callApi('sendMessage', {
           chat_id: chatId,
@@ -325,7 +191,6 @@ async function handleUpdate(update) {
           parse_mode: 'Markdown'
         });
       }
-
       return;
     }
 
@@ -333,10 +198,10 @@ async function handleUpdate(update) {
     if (text && !text.startsWith('/')) {
       const cleanText = text.toUpperCase();
       if (cleanText.length >= 8) {
-        userSessions.set(chatId, { mid: cleanText, tier: 'LF' });
+        userSessions.set(chatId, cleanText);
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `💻 Machine ID saved: \`${cleanText}\`\n\nNow please send the photo of your **payment receipt** ($1.50 for 3 Months or $3 for Lifetime).`,
+          text: `💻 Machine ID saved: \`${cleanText}\`\n\nNow please send the photo of your **$3 payment receipt**.`,
           parse_mode: 'Markdown'
         });
       } else {
@@ -350,6 +215,39 @@ async function handleUpdate(update) {
 }
 
 // ==========================================
-// 6. START BOT
+// 5. CRASH-PROOF AUTO-RECOVERING POLLING ENGINE
 // ==========================================
-pollUpdates();
+async function startPolling() {
+  while (true) {
+    try {
+      console.log('>>> Initializing Telegram Polling Connection... <<<');
+      await callApi('deleteWebhook', { drop_pending_updates: false });
+
+      while (true) {
+        try {
+          const res = await fetch(`${TELEGRAM_API}/getUpdates?offset=${lastUpdateId + 1}&timeout=10`);
+          const data = await res.json();
+
+          if (data.ok && data.result.length > 0) {
+            for (const update of data.result) {
+              lastUpdateId = update.update_id;
+              try {
+                await handleUpdate(update);
+              } catch (updateErr) {
+                console.error('Handled update error safely:', updateErr.message);
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.error('Polling network glitch, retrying in 2s:', fetchErr.message);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    } catch (criticalErr) {
+      console.error('Critical crash. Restarting polling loop in 5s...', criticalErr.message);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+
+startPolling();
