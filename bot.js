@@ -22,7 +22,7 @@ http.createServer((req, res) => {
 });
 
 // ==========================================
-// 3. HELPER FUNCTIONS
+// 3. HELPER FUNCTIONS & ORIGINAL 2-PART KEY
 // ==========================================
 async function callApi(method, payload) {
   try {
@@ -42,6 +42,7 @@ async function callApi(method, payload) {
   }
 }
 
+// Generates the exact original 2-part key: LF-XXXXXXXXXXXXXXXX (Accepted by your C# plugin)
 function generateLifetimeKey(machineId) {
   const cleanMid = machineId.trim().toUpperCase();
   const payload = `${cleanMid}_LF_${SECRET_SALT}`;
@@ -72,14 +73,14 @@ async function handleUpdate(update) {
       const reqId = data.replace('approve_', '');
       const req = pendingRequests.get(reqId);
 
-      if (!req || !req.mid) {
-        await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Machine ID missing!' });
+      if (!req || !req.mid || req.mid === 'NOT DETECTED') {
+        await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Machine ID missing! Cannot issue key.' });
         return;
       }
 
       const key = generateLifetimeKey(req.mid);
 
-      // Send the activation key to the client
+      // Deliver key directly to the customer
       await callApi('sendMessage', {
         chat_id: req.clientChatId,
         text: `🎉 *Payment Confirmed!*\n\n` +
@@ -90,14 +91,25 @@ async function handleUpdate(update) {
       });
 
       // Update admin message caption
-      await callApi('editMessageCaption', {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id,
-        caption: `✅ *Approved & Key Delivered*\n\n` +
-                 `💻 Machine ID: \`${req.mid}\`\n` +
-                 `🔑 Generated Key: \`${key}\``,
-        parse_mode: 'Markdown'
-      });
+      const finalCaption = `✅ *Approved & Key Delivered*\n\n` +
+                           `💻 Machine ID: \`${req.mid}\`\n` +
+                           `🔑 Generated Key: \`${key}\``;
+
+      if (query.message.photo || query.message.document) {
+        await callApi('editMessageCaption', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          caption: finalCaption,
+          parse_mode: 'Markdown'
+        });
+      } else {
+        await callApi('editMessageText', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: finalCaption,
+          parse_mode: 'Markdown'
+        });
+      }
 
       await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Key sent!' });
       pendingRequests.delete(reqId);
@@ -113,11 +125,20 @@ async function handleUpdate(update) {
         });
       }
 
-      await callApi('editMessageCaption', {
-        chat_id: query.message.chat.id,
-        message_id: query.message.message_id,
-        caption: `❌ *Rejected*`
-      });
+      const rejectCaption = `❌ *Rejected*`;
+      if (query.message.photo || query.message.document) {
+        await callApi('editMessageCaption', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          caption: rejectCaption
+        });
+      } else {
+        await callApi('editMessageText', {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: rejectCaption
+        });
+      }
 
       await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Rejected' });
       pendingRequests.delete(reqId);
@@ -134,7 +155,13 @@ async function handleUpdate(update) {
     // 1. /start command
     if (text.startsWith('/start')) {
       const parts = text.split(' ');
-      const passedMid = parts.length > 1 ? parts[1].trim().toUpperCase() : null;
+      const rawParam = parts.length > 1 ? parts[1].trim().toUpperCase() : null;
+
+      let passedMid = null;
+      if (rawParam) {
+        // Strip any trailing tier flags if passed by accident
+        passedMid = rawParam.includes('_') ? rawParam.split('_')[0] : rawParam;
+      }
 
       if (passedMid && passedMid.length >= 8) {
         userSessions.set(chatId, passedMid);
@@ -158,21 +185,32 @@ async function handleUpdate(update) {
       return;
     }
 
-    // 2. Payment receipt image
-    if (msg.photo) {
-      const fileId = msg.photo[msg.photo.length - 1].file_id;
-      const caption = msg.caption ? msg.caption.trim().toUpperCase() : '';
-      const mid = caption.match(/[A-F0-9]{8,24}/)?.[0] || userSessions.get(chatId) || '';
+    // 2. Universal Payment Receipt Handler (Photos & Documents)
+    const isPhoto = Boolean(msg.photo && msg.photo.length > 0);
+    const isImageDoc = Boolean(msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/'));
+
+    if (isPhoto || isImageDoc) {
+      const fileId = isPhoto ? msg.photo[msg.photo.length - 1].file_id : msg.document.file_id;
+      const caption = (msg.caption || '').trim().toUpperCase();
+      const mid = caption.match(/[A-F0-9]{8,24}/)?.[0] || userSessions.get(chatId) || 'NOT DETECTED';
 
       const reqId = `REQ_${Date.now()}`;
       pendingRequests.set(reqId, { clientChatId: chatId, mid: mid });
 
-      await callApi('sendPhoto', {
+      const clientName = msg.from.username 
+        ? `@${msg.from.username}` 
+        : [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Customer';
+
+      const sendMethod = isPhoto ? 'sendPhoto' : 'sendDocument';
+      const payloadKey = isPhoto ? 'photo' : 'document';
+
+      await callApi(sendMethod, {
         chat_id: ADMIN_CHAT_ID,
-        photo: fileId,
+        [payloadKey]: fileId,
         caption: `📩 *New Payment Slip Received*\n\n` +
-                 `👤 Client: @${msg.from.username || msg.from.first_name || 'Customer'}\n` +
-                 `💻 Machine ID: \`${mid || 'NOT DETECTED (Ask user)'}\``,
+                 `👤 Client: ${clientName} (\`${chatId}\`)\n` +
+                 `💻 Machine ID: \`${mid}\`\n` +
+                 `🏷 Plan: *Lifetime ($3.00)*`,
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
