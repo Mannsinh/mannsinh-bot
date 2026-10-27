@@ -11,7 +11,7 @@ const SECRET_SALT = 'Mannsinh_CAD_Suite_2026_SecureKey_#9982!';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // ==========================================
-// 2. HEALTH CHECK WEB SERVER (24/7 CLOUD HOSTING)
+// 2. HEALTH CHECK WEB SERVER (24/7 HOSTING)
 // ==========================================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -21,9 +21,17 @@ http.createServer((req, res) => {
   console.log(`Web health check server active on port ${PORT}`);
 });
 
-// ==========================================
-// 3. API CALLER & 3-PART LIFETIME KEY GENERATOR
-// ==========================================
+// Helper to escape HTML special characters in customer names
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 async function callApi(method, payload) {
   try {
     const res = await fetch(`${TELEGRAM_API}/${method}`, {
@@ -42,7 +50,7 @@ async function callApi(method, payload) {
   }
 }
 
-// Generates the working LF-PERM-XXXXXXXX key matching your C# plugin
+// Generate the 3-part LF-PERM-XXXXXXXX key that your C# AutoCAD plugin accepts
 function generateLifetimeKey(machineId) {
   const cleanMid = machineId.trim().toUpperCase();
   const tier = 'LF';
@@ -58,7 +66,7 @@ const pendingRequests = new Map();
 let lastUpdateId = 0;
 
 // ==========================================
-// 4. UPDATE HANDLER (MESSAGES & BUTTONS)
+// 3. UPDATE HANDLER
 // ==========================================
 async function handleUpdate(update) {
   // A. Admin Button Actions (Approve / Reject)
@@ -82,40 +90,40 @@ async function handleUpdate(update) {
 
       const key = generateLifetimeKey(req.mid);
 
-      // Deliver key directly to the customer
+      // Deliver key directly to client
       await callApi('sendMessage', {
         chat_id: req.clientChatId,
-        text: `🎉 *Payment Confirmed!*\n\n` +
-              `📦 **Plan:** Lifetime Access\n` +
-              `🔑 **Activation Key:**\n\n` +
-              `\`${key}\`\n\n` +
-              `👉 Copy this key, paste it into your AutoCAD dialog, and click **Activate License**.`,
-        parse_mode: 'Markdown'
+        text: `🎉 <b>Payment Confirmed!</b>\n\n` +
+              `📦 <b>Plan:</b> Lifetime Access\n` +
+              `🔑 <b>Activation Key:</b>\n\n` +
+              `<code>${key}</code>\n\n` +
+              `👉 Copy this key, paste it into your AutoCAD dialog, and click <b>Activate License</b>.`,
+        parse_mode: 'HTML'
       });
 
-      // Update admin message caption
-      const finalCaption = `✅ *Approved & Key Delivered*\n\n` +
+      // Update admin message
+      const finalCaption = `✅ <b>Approved & Key Delivered</b>\n\n` +
                            `📦 Plan: Lifetime Access\n` +
-                           `💻 Machine ID: \`${req.mid}\`\n` +
-                           `🔑 Generated Key: \`${key}\``;
+                           `💻 Machine ID: <code>${escapeHtml(req.mid)}</code>\n` +
+                           `🔑 Generated Key: <code>${key}</code>`;
 
       if (query.message.photo || query.message.document) {
         await callApi('editMessageCaption', {
           chat_id: query.message.chat.id,
           message_id: query.message.message_id,
           caption: finalCaption,
-          parse_mode: 'Markdown'
+          parse_mode: 'HTML'
         });
       } else {
         await callApi('editMessageText', {
           chat_id: query.message.chat.id,
           message_id: query.message.message_id,
           text: finalCaption,
-          parse_mode: 'Markdown'
+          parse_mode: 'HTML'
         });
       }
 
-      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Key sent!' });
+      await callApi('answerCallbackQuery', { callback_query_id: query.id, text: 'Key sent to customer!' });
       pendingRequests.delete(reqId);
 
     } else if (data.startsWith('reject_')) {
@@ -129,18 +137,20 @@ async function handleUpdate(update) {
         });
       }
 
-      const rejectCaption = `❌ *Rejected*`;
+      const rejectCaption = `❌ <b>Rejected</b>`;
       if (query.message.photo || query.message.document) {
         await callApi('editMessageCaption', {
           chat_id: query.message.chat.id,
           message_id: query.message.message_id,
-          caption: rejectCaption
+          caption: rejectCaption,
+          parse_mode: 'HTML'
         });
       } else {
         await callApi('editMessageText', {
           chat_id: query.message.chat.id,
           message_id: query.message.message_id,
-          text: rejectCaption
+          text: rejectCaption,
+          parse_mode: 'HTML'
         });
       }
 
@@ -170,29 +180,29 @@ async function handleUpdate(update) {
         userSessions.set(chatId, passedMid);
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
-                `💻 *Detected Machine ID:* \`${passedMid}\`\n\n` +
-                `Please send a photo or screenshot of your **$3 ABA / Bakong payment slip** below.`,
-          parse_mode: 'Markdown'
+          text: `👋 <b>Welcome to Mannsinh CAD Suite Activation!</b>\n\n` +
+                `💻 <b>Detected Machine ID:</b> <code>${escapeHtml(passedMid)}</code>\n\n` +
+                `Please send a screenshot or photo of your <b>$3 ABA / Bakong payment slip</b> below.`,
+          parse_mode: 'HTML'
         });
       } else {
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `👋 *Welcome to Mannsinh CAD Suite Activation!*\n\n` +
+          text: `👋 <b>Welcome to Mannsinh CAD Suite Activation!</b>\n\n` +
                 `To receive your lifetime activation key:\n` +
-                `1️⃣ Send your **Machine Hardware ID** (from AutoCAD dialog).\n` +
-                `2️⃣ Send your **$3 ABA / Bakong payment slip** screenshot.`,
-          parse_mode: 'Markdown'
+                `1️⃣ Send your <b>Machine Hardware ID</b> (from AutoCAD dialog).\n` +
+                `2️⃣ Send your <b>$3 ABA / Bakong payment slip</b> photo.`,
+          parse_mode: 'HTML'
         });
       }
       return;
     }
 
-    // 2. Universal Payment Receipt Handler (Photos & Documents)
+    // 2. Receipt photo/document handler
     const isPhoto = Boolean(msg.photo && msg.photo.length > 0);
-    const isImageDoc = Boolean(msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/'));
+    const isDoc = Boolean(msg.document);
 
-    if (isPhoto || isImageDoc) {
+    if (isPhoto || isDoc) {
       const fileId = isPhoto ? msg.photo[msg.photo.length - 1].file_id : msg.document.file_id;
       const caption = (msg.caption || '').trim().toUpperCase();
       const mid = caption.match(/[A-F0-9]{8,24}/)?.[0] || userSessions.get(chatId) || 'NOT DETECTED';
@@ -207,14 +217,15 @@ async function handleUpdate(update) {
       const sendMethod = isPhoto ? 'sendPhoto' : 'sendDocument';
       const payloadKey = isPhoto ? 'photo' : 'document';
 
-      await callApi(sendMethod, {
+      // Send slip with Approve/Reject buttons to admin
+      const sendResult = await callApi(sendMethod, {
         chat_id: ADMIN_CHAT_ID,
         [payloadKey]: fileId,
-        caption: `📩 *New Payment Slip Received*\n\n` +
-                 `👤 Client: ${clientName} (\`${chatId}\`)\n` +
-                 `💻 Machine ID: \`${mid}\`\n` +
-                 `🏷 Plan: *Lifetime ($3.00)*`,
-        parse_mode: 'Markdown',
+        caption: `📩 <b>New Payment Slip Received</b>\n\n` +
+                 `👤 <b>Client:</b> ${escapeHtml(clientName)} (<code>${chatId}</code>)\n` +
+                 `💻 <b>Machine ID:</b> <code>${escapeHtml(mid)}</code>\n` +
+                 `🏷 <b>Plan:</b> Lifetime ($3.00)`,
+        parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [
@@ -225,25 +236,46 @@ async function handleUpdate(update) {
         }
       });
 
+      // If photo forwarding failed for any reason, send fallback text message to admin
+      if (!sendResult || !sendResult.ok) {
+        await callApi('sendMessage', {
+          chat_id: ADMIN_CHAT_ID,
+          text: `⚠️ <b>New Payment Slip (Text Notice)</b>\n\n` +
+                `👤 <b>Client:</b> ${escapeHtml(clientName)} (<code>${chatId}</code>)\n` +
+                `💻 <b>Machine ID:</b> <code>${escapeHtml(mid)}</code>\n` +
+                `<i>Note: Client sent slip, but photo preview failed. Check direct chat.</i>`,
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Approve & Issue Key', callback_data: `approve_${reqId}` },
+                { text: '❌ Reject', callback_data: `reject_${reqId}` }
+              ]
+            ]
+          }
+        });
+      }
+
+      // Notify customer
       if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `✅ *Receipt received!* Your slip is under review. Your activation key will be delivered right here once verified.`,
-          parse_mode: 'Markdown'
+          text: `✅ <b>Receipt received!</b> Your payment slip is under review. Your activation key will be delivered right here once verified.`,
+          parse_mode: 'HTML'
         });
       }
       return;
     }
 
-    // 3. Text inputs (Manual Machine ID)
+    // 3. User sends raw text (Machine ID)
     if (text && !text.startsWith('/')) {
       const cleanText = text.toUpperCase();
       if (cleanText.length >= 8) {
         userSessions.set(chatId, cleanText);
         await callApi('sendMessage', {
           chat_id: chatId,
-          text: `💻 Machine ID saved: \`${cleanText}\`\n\nNow please send the photo of your **$3 payment receipt**.`,
-          parse_mode: 'Markdown'
+          text: `💻 Machine ID saved: <code>${escapeHtml(cleanText)}</code>\n\nNow please send the photo of your <b>$3 payment receipt</b>.`,
+          parse_mode: 'HTML'
         });
       } else {
         await callApi('sendMessage', {
@@ -256,7 +288,7 @@ async function handleUpdate(update) {
 }
 
 // ==========================================
-// 5. CRASH-PROOF AUTO-RECOVERING POLLING ENGINE
+// 4. CRASH-PROOF POLLING LOOP
 // ==========================================
 async function startPolling() {
   while (true) {
