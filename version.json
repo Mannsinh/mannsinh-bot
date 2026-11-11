@@ -1,5 +1,5 @@
 {
   "version": "1.0.5",
-  "downloadUrl": "https://github.com/Mannsinh/mannsinh-bot/raw/main/updates/Mannsinh.bundle.zip",
-  "changelog": "Initial stable release."
+  "downloadUrl": "https://github.com/Mannsinh/mannsinh-bot/raw/main/updates/Mannsinh_Update.zip",
+  "changelog": "- Added Survey Studio (Satellite Mapping & Vector Digitizer)\n- Added Visibility Toggle tool\n- Automatic bundle multi-installer"
 }
